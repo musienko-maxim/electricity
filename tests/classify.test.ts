@@ -48,4 +48,56 @@ describe('classifyEntry — known regressions', () => {
     expect(org).toBeDefined();
     expect(org?.displayName).toMatch(/^Парафія/);
   });
+
+  // STEP 2: full-form street prefixes ("Проспект", "Вулиця", "Бульвар",
+  // "Площа", "Провулок") now terminate entity ranges and seed parseStreetChunk.
+  it('full-form Проспект splits ТОВ from street+number', () => {
+    const items = classifyEntry('ТОВ "СКЛО-СЕРВІС" Проспект Хіміків 82');
+    const orgs = items.filter((i) => i.kind === 'organization');
+    const streets = items.filter((i) => i.kind === 'street_with_numbers');
+    expect(orgs.some((o) => /СКЛО-СЕРВІС/.test(o.displayName))).toBe(true);
+    expect(
+      streets.some((s) => s.streetName === 'Хіміків' && s.streetNumber === '82'),
+    ).toBe(true);
+  });
+
+  it('full-form Вулиця recognized as street prefix', () => {
+    const items = classifyEntry('Вулиця Шевченка 1, 3, 5');
+    const hits = items.filter(
+      (i) => i.kind === 'street_with_numbers' && i.streetName === 'Шевченка',
+    );
+    expect(hits.map((h) => h.streetNumber)).toEqual(
+      expect.arrayContaining(['1', '3', '5']),
+    );
+    // Normalized to abbreviated form for consistent display.
+    expect(hits[0].displayName).toMatch(/^вул\.\s+Шевченка/);
+  });
+
+  it('full-form Бульвар Шевченка 411 — display normalized to short form', () => {
+    const items = classifyEntry('Бульвар Шевченка 411');
+    const hit = items.find(
+      (i) => i.streetName === 'Шевченка' && i.streetNumber === '411',
+    );
+    expect(hit?.displayName).toMatch(/^бул\.\s+Шевченка\s+411$/);
+  });
+
+  it('Проспект-Будсервіс (hyphenated org) does NOT trigger street split', () => {
+    // Hyphen after "Проспект" must keep the full-form lookahead inactive so
+    // a hyphenated org name doesn't get misread as a street prefix.
+    const items = classifyEntry('ТОВ "Проспект-Будсервіс"');
+    const streets = items.filter((i) => i.kind.startsWith('street'));
+    expect(streets).toHaveLength(0);
+  });
+
+  // STEP 2: ENTITY_PREFIXES extended from 12-PDF audit.
+  it('ГДУ Держрибохорони is classified as organization (direct prefix)', () => {
+    const items = classifyEntry('ГДУ Держрибохорони в Черкаській області');
+    const org = items.find((i) => i.kind === 'organization');
+    expect(org?.displayName).toMatch(/^ГДУ\s+Держрибохорони/);
+  });
+
+  it('ВП "Промислові системи" classified as organization', () => {
+    const items = classifyEntry('ВП "Промислові системи"');
+    expect(items.some((i) => i.kind === 'organization' && /Промислові системи/.test(i.displayName))).toBe(true);
+  });
 });

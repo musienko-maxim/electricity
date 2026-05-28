@@ -3,11 +3,17 @@ import type { ItemKind, ParsedItem } from '../types';
 
 // Recognized organization / individual prefixes. Order matters: longer/more
 // specific prefixes (e.g. ФОП) must be matched before shorter ones (ФО).
+// Step 2 additions from the 12-PDF corpus audit:
+//   ГДУ (Гідробіологічне Дослідне Управління / Госп. дослідне управління)
+//   ВП  (Відокремлений підрозділ — common in energy/utility orgs)
+//   ТЦК (Територіальний центр комплектування — military recruitment centers)
+//   КХП (Комбікормовий хлібоприймальний пункт — feed mills)
 const ENTITY_PREFIXES = [
   'ФОП', 'ФО',
   'ТОВ', 'ПП', 'ПрАТ', 'ПАТ', 'АТ', 'СТОВ', 'СФГ', 'ФГ', 'КНП', 'КП',
   'ОСББ', 'ДП', 'ВКП', 'ВКБП', 'МП', 'ТДВ', 'ВСП', 'КС', 'ЧОКП', 'ГУ',
   'НП', 'РКП', 'РайСТ', 'ОСС', 'ЖБК', 'ПСП', 'АПК', 'АФ',
+  'ГДУ', 'ТЦК', 'КХП', 'ВП',
 ];
 
 const ENTITY_KIND: Record<string, ItemKind> = {
@@ -17,6 +23,18 @@ const ENTITY_KIND: Record<string, ItemKind> = {
 
 const STREET_PREFIXES = ['вул.', 'пров.', 'просп.', 'пр-т', 'пр.', 'пл.', 'бул.', 'прв.', 'ул.', 'прс.', 'б-р.'];
 const SETTLEMENT_PREFIXES = ['с.', 'смт.', 'м.', 'х.'];
+
+// Reusable subpatterns for matching street prefixes anywhere in the pipeline.
+// Abbreviated forms ("вул.", "просп.", "б-р.") are matched directly. Full-form
+// nominative singular words ("Проспект", "Вулиця", "Бульвар", "Площа",
+// "Провулок") need a `\s+<capital-letter>` lookahead so they only fire when
+// followed by a real street name — keeps "Проспект-Будсервіс" (hyphenated org)
+// or "Проспектом" (declined form) from being misread as a street prefix.
+const ABBREV_STREET_PREFIX_PATTERN =
+  'вул\\.|пров\\.|просп\\.|пр-?т|пл\\.|бул\\.|прв\\.|ул\\.|прс\\.|б-р\\.';
+const FULL_FORM_STREET_PREFIX_PATTERN =
+  '(?:Проспект|Вулиця|Бульвар|Площа|Провулок)(?=\\s+[А-ЯІЇЄҐа-яіїєґ])';
+const ANY_STREET_PREFIX_PATTERN = `(?:${ABBREV_STREET_PREFIX_PATTERN}|${FULL_FORM_STREET_PREFIX_PATTERN})`;
 
 // Org-leading lexical heads — words that strongly indicate an organization name
 // when no recognized entity prefix (ТОВ/ПП/АТ/…) is present. Used as a fallback.
@@ -68,9 +86,11 @@ function preprocess(raw: string): string {
   );
   // Strip enumeration intro words ("вулиці:", "Провулки:", "Бульвари:",
   // "Проспекти:", "Площі:") so the actual street prefix becomes the chunk head.
-  // We delete the word + optional colon so what follows parses normally.
+  // CRITICAL: require the trailing colon — otherwise "Вулиця Шевченка" (a
+  // legitimate full-form street prefix introduced in step 2) gets shredded
+  // because /вулиц[іеяю]/iu also matches "Вулиця".
   s = s.replace(
-    /(?<=^|[^А-Яа-яІЇЄҐіїєґA-Za-z0-9])(вулиц[іеяю]|вулиц[ьа]|провулки|провулків|бульвари|проспекти|площі)\s*:?\s*/giu,
+    /(?<=^|[^А-Яа-яІЇЄҐіїєґA-Za-z0-9])(вулиц[іеяю]|вулиц[ьа]|провулки|провулків|бульвари|проспекти|площі)\s*:\s*/giu,
     '',
   );
   s = s.replace(/\s+/g, ' ').trim();
@@ -123,7 +143,8 @@ function makeItem(
 // Lookahead used by extractEntities to detect an embedded street prefix that
 // should terminate an org range (so "ГДУ X. вул. Дахнівська 1" yields an org
 // AND a street, not one bloated org item with no number continuation context).
-const STREET_PREFIX_LOOKAHEAD = /^(вул\.|пров\.|просп\.|пр-?т|пл\.|бул\.|прв\.|ул\.|прс\.|б-р\.)/iu;
+// Recognizes both abbreviated and full-form prefixes (Проспект Хіміків 82 etc.).
+const STREET_PREFIX_LOOKAHEAD = new RegExp(`^${ANY_STREET_PREFIX_PATTERN}`, 'iu');
 
 // Find org/fop/person mentions globally in the text. We anchor on entity
 // prefixes (ФОП, ТОВ, …) and capture text up to the next entity prefix,
@@ -215,18 +236,21 @@ function parseStreetChunk(
   const items: ParsedItem[] = [];
   let prefix: string | null = prevPrefix;
 
-  // Does the chunk start with an explicit prefix?
+  // Does the chunk start with an explicit prefix? Accepts both abbreviated
+  // forms (вул., просп., …) and full-form words (Проспект, Вулиця, …) when
+  // those are followed by whitespace + a Cyrillic name.
   const prefixMatch = chunk.match(
-    /^\s*(вул\.|пров\.|просп\.|пр-?т|пл\.|бул\.|прв\.|ул\.|прс\.|б-р\.)\s*/iu,
+    new RegExp(`^\\s*(${ABBREV_STREET_PREFIX_PATTERN}|${FULL_FORM_STREET_PREFIX_PATTERN})\\s*`, 'iu'),
   );
   let rest = chunk;
   if (prefixMatch) {
     const raw = prefixMatch[1].toLowerCase();
     prefix =
-      raw === 'пр-т' || raw === 'прс.' ? 'просп.' :
-      raw === 'ул.' ? 'вул.' :
-      raw === 'прв.' ? 'пров.' :
-      raw === 'б-р.' ? 'бул.' :
+      raw === 'пр-т' || raw === 'прс.' || raw === 'проспект' ? 'просп.' :
+      raw === 'ул.' || raw === 'вулиця' ? 'вул.' :
+      raw === 'прв.' || raw === 'провулок' ? 'пров.' :
+      raw === 'б-р.' || raw === 'бульвар' ? 'бул.' :
+      raw === 'площа' ? 'пл.' :
       raw;
     rest = chunk.slice(prefixMatch[0].length);
   }
@@ -384,7 +408,10 @@ export function classifyEntry(rawText: string): ParsedItem[] {
       // part also seeds lastStreetName so subsequent number-only chunks
       // ("2/15", "2/17") attach to it.
       const embed = chunk.match(
-        /(?<=^|[^А-Яа-яІЇЄҐіїєґA-Za-z0-9])(вул\.|пров\.|просп\.|пр-?т|пл\.|бул\.|прв\.|ул\.|прс\.|б-р\.)/iu,
+        new RegExp(
+          `(?<=^|[^А-Яа-яІЇЄҐіїєґA-Za-z0-9])(${ABBREV_STREET_PREFIX_PATTERN}|${FULL_FORM_STREET_PREFIX_PATTERN})`,
+          'iu',
+        ),
       );
       if (embed && embed.index !== undefined && embed.index > 0) {
         const orgPart = chunk.slice(0, embed.index).replace(/[\s.,;:]+$/u, '');
