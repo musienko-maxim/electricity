@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+.env
+.env.local
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+/data
+/pdf-cache
+.DS_Store
+*.log
+next-env.d.ts
+.tsbuildinfo
