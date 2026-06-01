@@ -31,6 +31,7 @@ export async function runIngest(urls: string[]): Promise<void> {
   ingestState.total = urls.length;
   ingestState.lastLabel = '';
   ingestState.error = null;
+  ingestState.completedAt = null;
 
   let successCount = 0;
   let totalItems = 0;
@@ -51,7 +52,7 @@ export async function runIngest(urls: string[]): Promise<void> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       failures.push(msg);
-      ingestState.current++;
+      ++ingestState.current;
       console.error(`[ingest-state] FAILED ${url}: ${msg}`);
     }
     await new Promise<void>((r) => setImmediate(r));
