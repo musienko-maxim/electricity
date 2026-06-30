@@ -7,13 +7,12 @@ beforeEach(() => {
 describe('POST /api/ingest/refresh', () => {
   it('returns 202 and fires runIngest when status is idle', async () => {
     const runIngest = vi.fn().mockResolvedValue(undefined);
+    const discoverUrls = vi.fn().mockResolvedValue(['http://x/1.pdf', 'http://x/2.pdf']);
     vi.doMock('@/lib/ingest-state', () => ({
       ingestState: { status: 'idle' },
       runIngest,
     }));
-    vi.doMock('@/server/bootstrap', () => ({
-      discoverUrls: vi.fn().mockResolvedValue(['http://x/1.pdf', 'http://x/2.pdf']),
-    }));
+    vi.doMock('@/server/bootstrap', () => ({ discoverUrls }));
 
     const { POST } = await import('@/app/api/ingest/refresh/route');
     const res = await POST();
@@ -22,9 +21,11 @@ describe('POST /api/ingest/refresh', () => {
     const body = await res.json();
     expect(body.message).toBe('started');
 
-    // Give the fire-and-forget promise a tick to start
-    await new Promise((r) => setTimeout(r, 10));
-    expect(runIngest).toHaveBeenCalledWith(['http://x/1.pdf', 'http://x/2.pdf']);
+    // Race fix: runIngest is invoked synchronously with the discovery thunk
+    // (not after `await discoverUrls()`), so it flips status to 'running'
+    // before the response returns and the client opens the SSE stream.
+    expect(runIngest).toHaveBeenCalledOnce();
+    expect(runIngest).toHaveBeenCalledWith(discoverUrls);
   });
 
   it('returns 202 and fires runIngest when status is done (re-ingest allowed)', async () => {

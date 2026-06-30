@@ -112,6 +112,70 @@ describe('runIngest — concurrency guard', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Eager status flip (refresh-race fix)
+// ---------------------------------------------------------------------------
+
+describe('runIngest — eager status flip with a urls thunk', () => {
+  it('flips status to running synchronously, before the urls thunk resolves', async () => {
+    vi.doMock('@/lib/ingest', () => ({
+      ingestPdf: vi.fn().mockResolvedValue(makeResult()),
+    }));
+
+    const { ingestState, runIngest } = await import('@/lib/ingest-state');
+
+    let resolveUrls!: (u: string[]) => void;
+    const urlsThunk = () =>
+      new Promise<string[]>((res) => {
+        resolveUrls = res;
+      });
+
+    // Don't await — status must already be 'running' while discovery is pending,
+    // so a stream/search observing state right after refresh sees 'running',
+    // never the stale prior 'done'/'error'.
+    const run = runIngest(urlsThunk);
+    expect(ingestState.status).toBe('running');
+
+    resolveUrls(['http://x/1.pdf']);
+    await run;
+    expect(ingestState.status).toBe('done');
+  });
+
+  it('surfaces a discovery failure as error state instead of getting stuck running', async () => {
+    vi.doMock('@/lib/ingest', () => ({ ingestPdf: vi.fn() }));
+
+    const { ingestState, ingestEvents, runIngest } = await import('@/lib/ingest-state');
+    const errorEvents: unknown[] = [];
+    ingestEvents.on('ingest-error', (d) => errorEvents.push(d));
+
+    await runIngest(() => Promise.reject(new Error('no urls configured')));
+
+    expect(ingestState.status).toBe('error');
+    expect(ingestState.error).toMatch(/no urls configured/);
+    expect(errorEvents).toHaveLength(1);
+  });
+
+  it('preserves the previous completedAt while re-running (serves stale data during refresh)', async () => {
+    vi.doMock('@/lib/ingest', () => ({
+      ingestPdf: vi.fn().mockResolvedValue(makeResult()),
+    }));
+
+    const { ingestState, runIngest } = await import('@/lib/ingest-state');
+    await runIngest(['http://x/1.pdf']);
+    const firstCompletedAt = ingestState.completedAt;
+    expect(firstCompletedAt).toBeTruthy();
+
+    // Begin a second run with a pending thunk; completedAt must remain set.
+    let resolveUrls!: (u: string[]) => void;
+    const run = runIngest(() => new Promise<string[]>((res) => { resolveUrls = res; }));
+    expect(ingestState.status).toBe('running');
+    expect(ingestState.completedAt).toBe(firstCompletedAt);
+
+    resolveUrls(['http://x/1.pdf']);
+    await run;
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 
