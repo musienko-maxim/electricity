@@ -5,9 +5,9 @@ beforeEach(() => {
   vi.resetModules();
 });
 
-function makeStateMock(status: string, current = 3, total = 12) {
+function makeStateMock(status: string, current = 3, total = 12, error: string | null = null) {
   const ingestEvents = new EventEmitter();
-  const ingestState = { status, current, total, lastLabel: 'тест', completedAt: null, error: null };
+  const ingestState = { status, current, total, lastLabel: 'тест', completedAt: null, error };
   return { ingestState, ingestEvents, runIngest: vi.fn() };
 }
 
@@ -69,6 +69,19 @@ describe('GET /api/ingest/stream', () => {
     expect(text).toContain('"current":4');
 
     reader.cancel();
+  });
+
+  it('includes error in init payload when status is error', async () => {
+    const errMsg = 'All 3 PDF ingestions failed: connect ECONNREFUSED';
+    vi.doMock('@/lib/ingest-state', () => makeStateMock('error', 3, 3, errMsg));
+
+    const { GET } = await import('@/app/api/ingest/stream/route');
+    const res = await GET();
+
+    const text = await readChunk(res.body!);
+    expect(text).toContain('event: init');
+    expect(text).toContain('"status":"error"');
+    expect(text).toContain(`"error":"${errMsg}"`);
   });
 
   it('removes event listeners when stream is cancelled (no leak)', async () => {
