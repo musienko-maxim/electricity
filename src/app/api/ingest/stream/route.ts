@@ -42,6 +42,7 @@ export function GET() {
           total: ingestState.total,
           lastLabel: ingestState.lastLabel,
           completedAt: ingestState.completedAt,
+          error: ingestState.error,
         }),
       );
 
