@@ -10,11 +10,14 @@ export function POST() {
     return NextResponse.json({ message: 'already_running' }, { status: 409 });
   }
 
-  discoverUrls()
-    .then((urls) => runIngest(urls))
-    .catch((err: Error) =>
-      console.error('[refresh] failed to start ingest:', err.message),
-    );
+  // Pass the discovery thunk (not `await discoverUrls()`) so runIngest flips
+  // status to 'running' synchronously, before this response returns and the
+  // client opens the SSE stream — otherwise the stream's init reads the stale
+  // prior 'done'/'error' and the overlay closes without showing progress.
+  // Promise.resolve(...) guards against a non-promise return (e.g. in tests).
+  Promise.resolve(runIngest(discoverUrls)).catch((err: Error) =>
+    console.error('[refresh] failed to start ingest:', err.message),
+  );
 
   return NextResponse.json({ message: 'started' }, { status: 202 });
 }

@@ -81,6 +81,16 @@ export function IngestOverlay({ onReady }: IngestOverlayProps) {
       setErrorMsg(data.message);
       es.close();
     });
+
+    es.onerror = () => {
+      // Native transport error (server down, dropped connection, 5xx). Without
+      // this, EventSource auto-reconnects every ~3s forever and the overlay
+      // stays stuck on the spinner. Stop retrying and show an error — unless we
+      // already reached a terminal state.
+      es.close();
+      setStatus((prev) => (prev === 'done' ? prev : 'error'));
+      setErrorMsg((prev) => prev || 'Втрачено з’єднання із сервером. Спробуйте ще раз.');
+    };
   }
 
   useEffect(() => {

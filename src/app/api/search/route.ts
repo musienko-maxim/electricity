@@ -29,7 +29,11 @@ export async function GET(request: Request) {
     );
   }
 
-  if (ingestState.status === 'idle') {
+  // Ready only once an ingest has successfully completed at least once
+  // (completedAt is set on success and preserved across re-runs). This covers
+  // idle, cold-start 'running' (empty DB), and total-failure 'error' — all of
+  // which would otherwise serve a misleading empty 200.
+  if (ingestState.completedAt === null) {
     return NextResponse.json({ message: 'not_ready' }, { status: 503 });
   }
 

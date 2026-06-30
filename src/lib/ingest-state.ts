@@ -23,15 +23,36 @@ export const ingestState: IngestState = {
 
 export const ingestEvents = new EventEmitter();
 
-export async function runIngest(urls: string[]): Promise<void> {
+/** URLs to ingest, or a thunk that discovers them. */
+export type IngestUrls = string[] | (() => Promise<string[]>);
+
+export async function runIngest(input: IngestUrls): Promise<void> {
   if (ingestState.status === 'running') return;
 
+  // Flip to 'running' synchronously — before awaiting discovery — so a stream
+  // or search that observes state right after a refresh request sees 'running',
+  // never the stale prior 'done'/'error'. completedAt is intentionally NOT
+  // reset: it marks the last *successful* ingest, so a re-run (or a re-run that
+  // fails) keeps serving the previously loaded data.
   ingestState.status = 'running';
   ingestState.current = 0;
-  ingestState.total = urls.length;
+  ingestState.total = 0;
   ingestState.lastLabel = '';
   ingestState.error = null;
-  ingestState.completedAt = null;
+
+  let urls: string[];
+  try {
+    urls = typeof input === 'function' ? await input() : input;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    ingestState.status = 'error';
+    ingestState.error = message;
+    ingestEvents.emit('ingest-error', { message });
+    console.error(`[ingest-state] discovery failed: ${message}`);
+    return;
+  }
+
+  ingestState.total = urls.length;
 
   let successCount = 0;
   let totalItems = 0;
