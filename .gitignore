@@ -15,3 +15,8 @@ next-env.d.ts
 .tsbuildinfo
 .worktrees/
 .claude/settings.local.json
+
+# Playwright
+playwright-report/
+test-results/
+tests/e2e/fixtures/data/
