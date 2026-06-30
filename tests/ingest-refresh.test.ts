@@ -5,14 +5,13 @@ beforeEach(() => {
 });
 
 describe('POST /api/ingest/refresh', () => {
-  it('returns 202 and fires runIngest when status is idle', async () => {
-    const runIngest = vi.fn().mockResolvedValue(undefined);
-    const discoverUrls = vi.fn().mockResolvedValue(['http://x/1.pdf', 'http://x/2.pdf']);
+  it('returns 202 and calls startIngest when status is idle', async () => {
+    const startIngest = vi.fn().mockReturnValue(undefined);
     vi.doMock('@/lib/ingest-state', () => ({
       ingestState: { status: 'idle' },
-      runIngest,
+      runIngest: vi.fn(),
     }));
-    vi.doMock('@/server/bootstrap', () => ({ discoverUrls }));
+    vi.doMock('@/server/bootstrap', () => ({ startIngest, discoverUrls: vi.fn() }));
 
     const { POST } = await import('@/app/api/ingest/refresh/route');
     const res = await POST();
@@ -20,36 +19,35 @@ describe('POST /api/ingest/refresh', () => {
     expect(res.status).toBe(202);
     const body = await res.json();
     expect(body.message).toBe('started');
-
-    // Race fix: runIngest is invoked synchronously with the discovery thunk
-    // (not after `await discoverUrls()`), so it flips status to 'running'
-    // before the response returns and the client opens the SSE stream.
-    expect(runIngest).toHaveBeenCalledOnce();
-    expect(runIngest).toHaveBeenCalledWith(discoverUrls);
+    expect(startIngest).toHaveBeenCalledOnce();
   });
 
-  it('returns 202 and fires runIngest when status is done (re-ingest allowed)', async () => {
-    const runIngest = vi.fn().mockResolvedValue(undefined);
+  it('returns 202 and calls startIngest when status is done (re-ingest allowed)', async () => {
+    const startIngest = vi.fn().mockReturnValue(undefined);
     vi.doMock('@/lib/ingest-state', () => ({
       ingestState: { status: 'done' },
-      runIngest,
+      runIngest: vi.fn(),
     }));
     vi.doMock('@/server/bootstrap', () => ({
-      discoverUrls: vi.fn().mockResolvedValue(['http://x/1.pdf']),
+      startIngest,
+      discoverUrls: vi.fn(),
     }));
 
     const { POST } = await import('@/app/api/ingest/refresh/route');
     const res = await POST();
 
     expect(res.status).toBe(202);
+    expect(startIngest).toHaveBeenCalledOnce();
   });
 
-  it('returns 409 when already running', async () => {
+  it('returns 409 when already running and does NOT call startIngest', async () => {
+    const startIngest = vi.fn();
     vi.doMock('@/lib/ingest-state', () => ({
       ingestState: { status: 'running' },
       runIngest: vi.fn(),
     }));
     vi.doMock('@/server/bootstrap', () => ({
+      startIngest,
       discoverUrls: vi.fn(),
     }));
 
@@ -59,5 +57,6 @@ describe('POST /api/ingest/refresh', () => {
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.message).toBe('already_running');
+    expect(startIngest).not.toHaveBeenCalled();
   });
 });
