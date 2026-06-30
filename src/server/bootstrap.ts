@@ -21,6 +21,14 @@ export async function discoverUrls(): Promise<string[]> {
   return urls;
 }
 
+/** Starts a fire-and-forget ingest run, passing the discovery thunk so that
+ *  runIngest flips status to 'running' synchronously before any await. */
+export function startIngest(): Promise<void> {
+  return Promise.resolve(runIngest(discoverUrls)).catch((err: Error) =>
+    console.error('[ingest] failed to start:', err.message),
+  );
+}
+
 // E2E fixture mode: set CHERKASY_E2E_SEED_COMPLETED_AT to an ISO timestamp to
 // skip real PDF ingestion and mark the DB as ready. The SSE stream will emit
 // init{status:'done'} immediately so the overlay closes, and /api/search will
@@ -32,9 +40,5 @@ if (e2eSeedCompletedAt) {
 } else {
   // Fire-and-forget on module load. The server is immediately available;
   // the client overlay tracks progress via SSE.
-  discoverUrls()
-    .then((urls) => runIngest(urls))
-    .catch((err: Error) =>
-      console.error('[bootstrap] failed to start ingest:', err.message),
-    );
+  startIngest();
 }

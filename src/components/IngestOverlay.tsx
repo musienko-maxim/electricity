@@ -13,6 +13,7 @@ interface InitPayload {
   total: number;
   lastLabel: string;
   completedAt: string | null;
+  error: string | null;
 }
 
 interface PdfDonePayload {
@@ -55,6 +56,7 @@ export function IngestOverlay({ onReady }: IngestOverlayProps) {
       }
       if (data.status === 'error') {
         setStatus('error');
+        setErrorMsg(data.error || 'Помилка завантаження даних');
         es.close();
         return;
       }
