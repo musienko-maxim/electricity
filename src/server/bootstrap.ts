@@ -1,4 +1,4 @@
-import { runIngest } from '../lib/ingest-state';
+import { runIngest, ingestState } from '../lib/ingest-state';
 import { discoverPdfUrls } from '../lib/pdf/discover';
 
 export async function discoverUrls(): Promise<string[]> {
@@ -29,6 +29,16 @@ export function startIngest(): Promise<void> {
   );
 }
 
-// Fire-and-forget on module load. The server is immediately available;
-// the client overlay tracks progress via SSE.
-startIngest();
+// E2E fixture mode: set CHERKASY_E2E_SEED_COMPLETED_AT to an ISO timestamp to
+// skip real PDF ingestion and mark the DB as ready. The SSE stream will emit
+// init{status:'done'} immediately so the overlay closes, and /api/search will
+// serve results from the pre-seeded DATA_DIR database.
+const e2eSeedCompletedAt = process.env.CHERKASY_E2E_SEED_COMPLETED_AT;
+if (e2eSeedCompletedAt) {
+  ingestState.status = 'done';
+  ingestState.completedAt = e2eSeedCompletedAt;
+} else {
+  // Fire-and-forget on module load. The server is immediately available;
+  // the client overlay tracks progress via SSE.
+  startIngest();
+}
