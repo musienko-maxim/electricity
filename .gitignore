@@ -13,3 +13,5 @@ out
 *.log
 next-env.d.ts
 .tsbuildinfo
+.worktrees/
+.claude/settings.local.json
