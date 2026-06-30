@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { ensureIngested } from '@/server/bootstrap';
+import '@/server/bootstrap'; // side-effect: trigger startup ingest
+import { ingestState } from '@/lib/ingest-state';
 import { searchItems } from '@/lib/search';
 
 export const runtime = 'nodejs';
@@ -28,11 +29,12 @@ export async function GET(request: Request) {
     );
   }
 
-  try {
-    await ensureIngested();
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'ingest_failed';
-    return NextResponse.json({ error: 'ingest_failed', message: msg }, { status: 503 });
+  // Ready only once an ingest has successfully completed at least once
+  // (completedAt is set on success and preserved across re-runs). This covers
+  // idle, cold-start 'running' (empty DB), and total-failure 'error' — all of
+  // which would otherwise serve a misleading empty 200.
+  if (ingestState.completedAt === null) {
+    return NextResponse.json({ message: 'not_ready' }, { status: 503 });
   }
 
   const { q, kind, page, pageSize } = parsed.data;

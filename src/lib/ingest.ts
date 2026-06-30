@@ -11,6 +11,7 @@ export interface IngestResult {
   entries: number;
   items: number;
   skipped: boolean;
+  label: string;
 }
 
 export async function ingestPdf(url: string): Promise<IngestResult> {
@@ -41,8 +42,8 @@ export async function ingestPdf(url: string): Promise<IngestResult> {
   if (existing && existing.sha256 === fetched.sha256 && existing.status === 'ready') {
     // Cached and unchanged — nothing to do.
     const q = db
-      .prepare('SELECT id FROM queues WHERE source_pdf_id = ?')
-      .get(existing.id) as { id: number } | undefined;
+      .prepare('SELECT id, label FROM queues WHERE source_pdf_id = ?')
+      .get(existing.id) as { id: number; label: string } | undefined;
     const entryCount = q
       ? (db
           .prepare('SELECT COUNT(*) AS n FROM entries WHERE queue_id = ?')
@@ -62,6 +63,7 @@ export async function ingestPdf(url: string): Promise<IngestResult> {
       entries: entryCount,
       items: itemCount,
       skipped: true,
+      label: q?.label ?? '',
     };
   }
 
@@ -171,5 +173,6 @@ export async function ingestPdf(url: string): Promise<IngestResult> {
     entries: out.entryCount,
     items: out.itemCount,
     skipped: false,
+    label: doc.label,
   };
 }

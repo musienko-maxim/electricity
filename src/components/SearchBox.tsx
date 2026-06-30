@@ -23,7 +23,12 @@ const KIND_META: Record<ItemKind, { label: string; icon: React.ReactNode; color:
 
 const PAGE_SIZE = 15;
 
-export function SearchBox() {
+interface SearchBoxProps {
+  refreshedAt: string | null;
+  onRefreshStart: () => void;
+}
+
+export function SearchBox({ refreshedAt, onRefreshStart }: SearchBoxProps) {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<SearchKindFilter>('all');
   const [page, setPage] = useState(1);
@@ -72,6 +77,27 @@ export function SearchBox() {
     return () => clearTimeout(t);
   }, [q, kind, page]);
 
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Reset refreshing when parent passes a new completedAt timestamp.
+  useEffect(() => {
+    if (refreshedAt) setRefreshing(false);
+  }, [refreshedAt]);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      const res = await fetch('/api/ingest/refresh', { method: 'POST' });
+      if (res.ok || res.status === 409) {
+        onRefreshStart();
+      } else {
+        setRefreshing(false);
+      }
+    } catch {
+      setRefreshing(false);
+    }
+  }
+
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const showDropdown = q.trim().length >= 2;
 
@@ -112,6 +138,19 @@ export function SearchBox() {
             </button>
           );
         })}
+      </div>
+
+      <div className="mt-2 flex justify-end items-center gap-2 text-xs text-slate-400">
+        {refreshedAt && <span>Оновлено: {formatDate(refreshedAt)}</span>}
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="hover:text-slate-600 disabled:opacity-50 transition-colors"
+          aria-label="Оновити дані"
+        >
+          {refreshing ? 'Оновлення…' : '↺ Оновити'}
+        </button>
       </div>
 
       {showDropdown && (
@@ -207,6 +246,6 @@ function SkeletonRows() {
 }
 
 function formatDate(iso: string): string {
-  const [y, m, d] = iso.split('-');
+  const [y, m, d] = iso.slice(0, 10).split('-');
   return `${d}.${m}.${y}`;
 }
