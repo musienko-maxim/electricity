@@ -10,6 +10,8 @@ export interface IngestState {
   lastLabel: string;
   completedAt: string | null;
   error: string | null;
+  // Epoch ms when the last ingest run began; drives the refresh rate-limit.
+  lastStartedAt: number | null;
 }
 
 export const ingestState: IngestState = {
@@ -19,6 +21,7 @@ export const ingestState: IngestState = {
   lastLabel: '',
   completedAt: null,
   error: null,
+  lastStartedAt: null,
 };
 
 export const ingestEvents = new EventEmitter();
@@ -39,6 +42,7 @@ export async function runIngest(input: IngestUrls): Promise<void> {
   ingestState.total = 0;
   ingestState.lastLabel = '';
   ingestState.error = null;
+  ingestState.lastStartedAt = Date.now();
 
   let urls: string[];
   try {
