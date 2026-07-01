@@ -1,0 +1,31 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cherkasy-queue-lookup:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      # Named volume persists SQLite database and PDF cache across restarts.
+      # Mount point matches DATA_DIR so both db.ts and fetch.ts write here.
+      - cherkasy_data:/app/data
+    environment:
+      # URL of the index page listing all current outage-schedule PDFs.
+      # The app self-heals when upstream rotates per-publication UUIDs.
+      - CHERKASY_INDEX_URL=${CHERKASY_INDEX_URL:-}
+      # Optional single-PDF override / fallback (iter1 mode).
+      - CHERKASY_SAMPLE_PDF_URL=${CHERKASY_SAMPLE_PDF_URL:-}
+      # Data directory inside the container — must match the volume mount path.
+      - DATA_DIR=/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/', (r) => { process.exitCode = r.statusCode === 200 ? 0 : 1; })"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  cherkasy_data:
+    driver: local
