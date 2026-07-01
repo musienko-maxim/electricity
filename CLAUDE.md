@@ -12,6 +12,7 @@ belong to. Data comes from Cherkasyoblenergo outage-schedule PDFs at
 - `npm run dev` — dev server at http://localhost:3000 (ready immediately; ingest runs async)
 - `npm run build` / `npm run start` — production build / serve
 - `npm test` — Vitest (run once); `npm run test:watch`
+- `npm run test:e2e` — Playwright e2e (Chromium); fixture DB seeded via `CHERKASY_E2E_SEED_COMPLETED_AT`
 - `npm run ingest` — one-off ingest (`scripts/ingest-once.ts`)
 - Wipe SQLite cache (force cold-start): `rm -f data/cherkasy.sqlite data/cherkasy.sqlite-shm data/cherkasy.sqlite-wal`
 
@@ -44,7 +45,9 @@ UI: `page.tsx` → `ClientShell` → `IngestOverlay` (SSE) + `SearchBox`.
 - Vitest, node environment. Tests in `tests/**/*.test.ts` and `src/**/*.test.ts`.
 - TDD: write a failing test, commit it (`test(scope): ...`), implement, commit (`feat(scope): ...`).
 - Reset module singletons per-test with `vi.resetModules()` + `vi.doMock`. See skill `testing-conventions`.
-- No Playwright yet — the `e2e-qa` agent scaffolds it.
+- Playwright e2e in `tests/e2e/` (`npm run test:e2e`): seeds a fixture SQLite DB via the
+  `CHERKASY_E2E_SEED_COMPLETED_AT` bootstrap hook; specs are `*.spec.ts` (excluded from Vitest).
+  Scaffolded by the `e2e-qa` agent. See `CONTRIBUTING.md`.
 
 ## Git workflow
 
