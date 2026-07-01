@@ -75,6 +75,52 @@ describe('fetchPdf — timeout', () => {
   }, 5000);
 });
 
+describe('fetchPdf — size cap (OOM protection)', () => {
+  it('rejects and does NOT cache a PDF whose declared content-length exceeds the cap', async () => {
+    const big = Buffer.concat([PDF_MAGIC, Buffer.alloc(2000)]);
+    global.fetch = vi.fn(async () =>
+      new Response(big, { status: 200, headers: { 'content-length': String(big.length) } }),
+    ) as unknown as typeof fetch;
+
+    const { fetchPdf } = await import('../src/lib/pdf/fetch');
+    await expect(
+      fetchPdf('https://example.com/big.pdf', { maxBytes: 100 }),
+    ).rejects.toThrow(/large|cap|exceed/i);
+
+    const cacheDir = join(tmpRoot, 'pdf-cache');
+    if (existsSync(cacheDir)) {
+      const fs = await import('node:fs');
+      expect(fs.readdirSync(cacheDir).filter((f) => f.endsWith('.pdf'))).toHaveLength(0);
+    }
+  });
+
+  it('rejects an over-cap body even without a content-length header (streamed count)', async () => {
+    const big = Buffer.concat([PDF_MAGIC, Buffer.alloc(2000)]);
+    global.fetch = vi.fn(async () => {
+      const res = new Response(big, { status: 200 });
+      // Force the no-declared-length path so the streamed byte counter is exercised.
+      res.headers.delete('content-length');
+      return res;
+    }) as unknown as typeof fetch;
+
+    const { fetchPdf } = await import('../src/lib/pdf/fetch');
+    await expect(
+      fetchPdf('https://example.com/big2.pdf', { maxBytes: 100 }),
+    ).rejects.toThrow(/large|cap|exceed/i);
+  });
+
+  it('accepts a normal PDF under the cap', async () => {
+    global.fetch = vi.fn(async () =>
+      new Response(PDF_MAGIC, { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const { fetchPdf } = await import('../src/lib/pdf/fetch');
+    const r = await fetchPdf('https://example.com/ok.pdf', { maxBytes: 50_000_000 });
+    expect(r.cached).toBe(false);
+    expect(r.buffer.slice(0, 5).toString()).toBe('%PDF-');
+  });
+});
+
 describe('fetchPdf — conditional GET / revalidation', () => {
   // BUG #2: disk cache served unconditionally without revalidation.
   // After the fix: when an etag was stored, the next call should send

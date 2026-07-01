@@ -6,6 +6,10 @@ const BROWSER_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+// Cap downloaded PDF size to avoid an OOM from a malicious/misbehaving server
+// streaming an unbounded body into memory. Cherkasy schedule PDFs are well
+// under this; override per-call via opts.maxBytes.
+const DEFAULT_MAX_PDF_BYTES = 50 * 1024 * 1024; // 50 MiB
 const PDF_MAGIC = Buffer.from('%PDF-');
 
 export interface FetchedPdf {
@@ -25,6 +29,41 @@ export interface FetchPdfOptions {
   // whatever bytes are on disk.
   priorEtag?: string | null;
   priorLastModified?: string | null;
+  // Maximum bytes to read from the response body before rejecting (OOM guard).
+  maxBytes?: number;
+}
+
+// Read a response body into a Buffer, rejecting once more than `maxBytes` have
+// arrived. Checks the declared Content-Length first (cheap reject), then counts
+// bytes while streaming in case the header is absent or lies.
+async function readBodyCapped(res: Response, maxBytes: number, url: string): Promise<Buffer> {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`PDF too large: ${declared} bytes exceeds ${maxBytes}-byte cap (${url})`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > maxBytes) {
+      throw new Error(`PDF too large: exceeds ${maxBytes}-byte cap (${url})`);
+    }
+    return buf;
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`PDF too large: exceeds ${maxBytes}-byte cap (${url})`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
 }
 
 function cacheDir(): string {
@@ -99,8 +138,7 @@ export async function fetchPdf(url: string, opts: FetchPdfOptions = {}): Promise
   if (!res.ok) {
     throw new Error(`PDF fetch failed: ${res.status} ${res.statusText} (${url})`);
   }
-  const arrayBuf = await res.arrayBuffer();
-  const buf = Buffer.from(arrayBuf);
+  const buf = await readBodyCapped(res, opts.maxBytes ?? DEFAULT_MAX_PDF_BYTES, url);
   // CRITICAL: validate BEFORE writing to disk. A non-PDF 200 response (HTML
   // error page from the CDN) would otherwise poison the cache forever.
   validatePdfMagic(buf, url);
