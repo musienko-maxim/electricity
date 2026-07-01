@@ -1,0 +1,41 @@
+# Dependencies and build output — always regenerated inside the image
+node_modules
+.next
+out
+
+# Runtime data — persisted via a mounted volume, never baked into the image
+/data
+/pdf-cache
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+
+# Git internals
+.git
+.gitignore
+
+# Local env overrides (secrets must be injected at runtime, not baked in)
+.env
+.env.local
+.env.*.local
+
+# Test artefacts
+tests/e2e/fixtures/data
+playwright-report
+test-results
+
+# Worktrees and Claude agent state
+.worktrees
+.claude
+
+# Misc
+.DS_Store
+*.log
+tsconfig.tsbuildinfo
+README.md
+CONTRIBUTING.md
+CLAUDE.md
+initial-instructions.txt
+scripts
+docs
