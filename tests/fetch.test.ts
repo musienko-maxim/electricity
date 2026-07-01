@@ -9,11 +9,15 @@ let tmpRoot: string;
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'fetch-test-'));
   process.env.DATA_DIR = tmpRoot;
+  // Allow the test host so the behaviour tests below (which use example.com)
+  // pass the SSRF allowlist. The SSRF tests use hosts outside this list.
+  process.env.CHERKASY_ALLOWED_HOSTS = 'example.com';
   vi.resetModules();
 });
 
 afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
+  delete process.env.CHERKASY_ALLOWED_HOSTS;
   vi.restoreAllMocks();
 });
 
@@ -73,6 +77,45 @@ describe('fetchPdf — timeout', () => {
       fetchPdf('https://example.com/slow.pdf', { timeoutMs: 50 }),
     ).rejects.toThrow();
   }, 5000);
+});
+
+describe('fetchPdf — SSRF allowlist', () => {
+  it('rejects a URL whose host is not in the allowlist, without making a request', async () => {
+    const spy = vi.fn();
+    global.fetch = spy as unknown as typeof fetch;
+
+    const { fetchPdf } = await import('../src/lib/pdf/fetch');
+    await expect(
+      fetchPdf('http://169.254.169.254/latest/meta-data/'),
+    ).rejects.toThrow(/disallow|allow|host/i);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-HTTP(S) scheme', async () => {
+    const spy = vi.fn();
+    global.fetch = spy as unknown as typeof fetch;
+
+    const { fetchPdf } = await import('../src/lib/pdf/fetch');
+    await expect(fetchPdf('file:///etc/passwd')).rejects.toThrow(/http|scheme|disallow|host/i);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT follow a redirect that points at a disallowed host (SSRF via redirect)', async () => {
+    const spy = vi.fn(async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+      }),
+    );
+    global.fetch = spy as unknown as typeof fetch;
+
+    const { fetchPdf } = await import('../src/lib/pdf/fetch');
+    await expect(fetchPdf('https://example.com/foo.pdf')).rejects.toThrow(/disallow|allow|host/i);
+    // Only the first (allowlisted) request was attempted; the internal target
+    // was validated and rejected before any request was made to it.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0][0])).toContain('example.com');
+  });
 });
 
 describe('fetchPdf — size cap (OOM protection)', () => {

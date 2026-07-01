@@ -12,6 +12,57 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_PDF_BYTES = 50 * 1024 * 1024; // 50 MiB
 const PDF_MAGIC = Buffer.from('%PDF-');
 
+// SSRF allowlist. PDF URLs come from scraping an upstream page, so a compromised
+// or spoofed index could point them anywhere; only fetch http(s) URLs on a
+// trusted host. Override the default hosts via CHERKASY_ALLOWED_HOSTS (CSV).
+const DEFAULT_ALLOWED_HOSTS = ['gita.cherkasyoblenergo.com', 'www.cherkasyoblenergo.com'];
+const MAX_REDIRECT_HOPS = 3;
+
+function allowedHosts(): string[] {
+  const raw = process.env.CHERKASY_ALLOWED_HOSTS;
+  if (!raw) return DEFAULT_ALLOWED_HOSTS;
+  return raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+}
+
+function assertAllowedPdfUrl(url: string): void {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error(`Refusing to fetch malformed URL: ${url}`);
+  }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+    throw new Error(`Refusing to fetch non-HTTP(S) URL (scheme "${u.protocol}"): ${url}`);
+  }
+  if (!allowedHosts().includes(u.hostname.toLowerCase())) {
+    throw new Error(
+      `Refusing to fetch disallowed host "${u.hostname}" (not in CHERKASY_ALLOWED_HOSTS): ${url}`,
+    );
+  }
+}
+
+// fetch() with redirects followed MANUALLY so each hop's host is re-checked
+// against the allowlist. The default redirect:'follow' would chase an SSRF
+// redirect to an internal address before we could inspect it. 304 is a
+// conditional-GET response, not a redirect, so it is returned as-is.
+async function fetchAllowlisted(
+  url: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    assertAllowedPdfUrl(current);
+    const res = await fetch(current, { headers, signal, redirect: 'manual' });
+    const isRedirect = res.status >= 300 && res.status < 400 && res.status !== 304;
+    if (!isRedirect) return res;
+    const location = res.headers.get('location');
+    if (!location) return res;
+    current = new URL(location, current).toString();
+  }
+  throw new Error(`Too many redirects (> ${MAX_REDIRECT_HOPS}) for ${url}`);
+}
+
 export interface FetchedPdf {
   buffer: Buffer;
   sha256: string;
@@ -99,6 +150,9 @@ function readCached(cp: string): FetchedPdf {
 }
 
 export async function fetchPdf(url: string, opts: FetchPdfOptions = {}): Promise<FetchedPdf> {
+  // SSRF guard first — reject disallowed hosts/schemes before touching cache or network.
+  assertAllowedPdfUrl(url);
+
   const cp = cachePathFor(url);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const hasCache = existsSync(cp);
@@ -122,7 +176,7 @@ export async function fetchPdf(url: string, opts: FetchPdfOptions = {}): Promise
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
-    res = await fetch(url, { headers, signal: controller.signal });
+    res = await fetchAllowlisted(url, headers, controller.signal);
   } finally {
     clearTimeout(timer);
   }
