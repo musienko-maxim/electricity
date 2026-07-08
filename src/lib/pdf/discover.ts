@@ -50,12 +50,18 @@ function tolerantGet(url: string, timeoutMs: number): Promise<{ status: number; 
   });
 }
 
-// PDFs sit on the gita.cherkasyoblenergo.com CDN, served by an obl-main-controller
-// endpoint with paths like ".../file/obl_main_static_172_<uuid>.pdf". The 172
-// is the file-format-id; we match on the broader controller path so a new
-// format-id wouldn't silently drop us to zero results.
+// The schedule PDFs are published as files named "obl_main_static_<fmt>_<uuid>.pdf".
+// Upstream has changed how it links them over time:
+//   - legacy: absolute CDN URLs, ".../obl-main-controller/file/obl_main_static_172_<uuid>.pdf"
+//     on gita.cherkasyoblenergo.com
+//   - current (2026): ROOT-RELATIVE hrefs on www.cherkasyoblenergo.com, e.g.
+//     "/cherkasyoblenergo/uploads/pages/files/obl_main_static_172_<uuid>.pdf"
+// We anchor only on the stable "obl_main_static...<something>.pdf" filename token and
+// accept either an absolute URL or a root-relative path, so neither a rotated
+// format-id nor another path/host reshuffle silently drops us to zero results.
+// Relative matches are resolved against the index URL in extractPdfLinks.
 const PDF_LINK_RE =
-  /https?:\/\/[^"'\s<>]*\/obl-main-controller\/file\/obl_main_static[^"'\s<>]*\.pdf/giu;
+  /(?:https?:\/\/[^"'\s<>]+)?\/[^"'\s<>]*obl_main_static[^"'\s<>]*\.pdf/giu;
 
 export type HttpGetter = (
   url: string,
@@ -69,13 +75,24 @@ export interface DiscoverOptions {
   fetcher?: HttpGetter;
 }
 
-// Parses page HTML for PDF links. Exported separately so tests can feed
-// captured HTML without going over the network.
-export function extractPdfLinks(html: string): string[] {
+// Parses page HTML for PDF links, resolving root-relative hrefs against the
+// index page's URL so callers always get absolute, downloadable URLs. Exported
+// separately so tests can feed captured HTML without going over the network.
+export function extractPdfLinks(html: string, baseUrl: string): string[] {
   const found = html.match(PDF_LINK_RE) ?? [];
-  // The same href appears twice in the SSR'd Nuxt payload (anchor + JSON
-  // hydration), so dedupe. Sort for deterministic ingestion order.
-  return Array.from(new Set(found)).sort();
+  // Each file is referenced more than once in the SSR'd Nuxt payload: as an
+  // anchor href (prefixed "/cherkasyoblenergo/uploads/...") and again as a bare
+  // "/uploads/..." path in the JSON hydration block. These resolve to different
+  // absolute URLs but the same file, so dedupe by the "obl_main_static..._....pdf"
+  // filename, keeping the first URL in sorted order for deterministic ingestion.
+  const byFilename = new Map<string, string>();
+  for (const ref of found) {
+    const abs = new URL(ref, baseUrl).toString();
+    const filename = abs.slice(abs.lastIndexOf('/') + 1);
+    const existing = byFilename.get(filename);
+    if (existing === undefined || abs < existing) byFilename.set(filename, abs);
+  }
+  return Array.from(byFilename.values()).sort();
 }
 
 export async function discoverPdfUrls(
@@ -88,7 +105,7 @@ export async function discoverPdfUrls(
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`Index fetch failed: HTTP ${res.status} (${indexUrl})`);
   }
-  const urls = extractPdfLinks(res.body);
+  const urls = extractPdfLinks(res.body, indexUrl);
   if (urls.length === 0) {
     throw new Error(
       `No PDF links discovered at ${indexUrl} — page markup may have changed`,
